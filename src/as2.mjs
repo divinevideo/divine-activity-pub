@@ -15,6 +15,8 @@ export const ACTOR_CONTEXT = [
     toot: 'http://joinmastodon.org/ns#',
     schema: 'http://schema.org/',
     manuallyApprovesFollowers: 'as:manuallyApprovesFollowers',
+    PropertyValue: 'schema:PropertyValue',
+    value: 'schema:value',
   },
 ];
 
@@ -115,7 +117,40 @@ export function buildActor({ domain, username, profile = {}, publicKeyPem, keyId
     };
   }
 
+  const banner = profile.banner || profile.banner_url || null;
+  if (banner) {
+    actor.image = { type: 'Image', mediaType: guessImageMime(banner), url: banner };
+  }
+
+  // Profile metadata fields (Mastodon/Loops render these as the link/field list).
+  const fields = [];
+  const link = (name, href, text) =>
+    fields.push({ type: 'PropertyValue', name, value: `<a href="${escapeHtml(href)}" rel="me">${escapeHtml(text || href)}</a>` });
+  link('Divine', urls.profileUrl, `${username}.${domain}`);
+  if (profile.website) link('Website', profile.website);
+  if (profile.nip05) fields.push({ type: 'PropertyValue', name: 'Nostr', value: escapeHtml(profile.nip05) });
+  if (profile.lud16) fields.push({ type: 'PropertyValue', name: '⚡ Lightning', value: escapeHtml(profile.lud16) });
+  if (fields.length) actor.attachment = fields;
+
   return actor;
+}
+
+/**
+ * Build an Update{Person} activity to refresh a remote server's cached actor
+ * (bio / avatar / fields). Deliver to followers' inboxes like a Create.
+ */
+export function buildUpdate({ domain, username, actor }) {
+  const urls = actorUrls(domain, username);
+  return {
+    '@context': ACTOR_CONTEXT,
+    // eslint-disable-next-line no-undef
+    id: `${urls.id}#updates/${Math.floor(Date.now() / 1000)}`,
+    type: 'Update',
+    actor: urls.id,
+    to: [PUBLIC_URI],
+    cc: [urls.followers],
+    object: actor,
+  };
 }
 
 /**

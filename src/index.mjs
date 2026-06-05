@@ -4,7 +4,7 @@
 // ABOUTME: Divine ActivityPub Gateway entry point — actor/outbox reads, inbox
 // ABOUTME: (Follow->Accept), cron poll -> enqueue deliveries, queue consumer signs+POSTs.
 
-import { buildActor, buildOutbox, buildCreate, actorUrls } from './as2.mjs';
+import { buildActor, buildOutbox, buildCreate, buildUpdate, actorUrls } from './as2.mjs';
 import {
   createFunnelcakeClient,
   createModerationClient,
@@ -299,32 +299,52 @@ export async function handleInbox(env, clients, request, usernameOrNull, ctx = n
  */
 async function backfillFollower(env, clients, username, followerInbox) {
   const pubkey = await resolvePubkey(env, clients, username);
-  if (!pubkey || !followerInbox) return;
+  if (!pubkey || !followerInbox) return 0;
   // Content on api.divine.video is already moderation-reviewed, so we DON'T re-gate
-  // per-video here (the /check-result fan-out is slow and would time out in the
-  // background waitUntil context). Just deliver the most recent N.
+  // here. Deliver the FULL catalogue (capped at BACKFILL_MAX), in parallel batches
+  // so a 200+ video back-catalogue doesn't time out a sequential loop.
+  const max = Number(env.BACKFILL_MAX || 1000);
   let all = [];
   try {
-    all = await clients.funnelcake.getUserVideos(pubkey);
+    all = await clients.funnelcake.getUserVideos(pubkey, max);
   } catch (e) {
     console.error('[AP] backfill getUserVideos FAILED for', pubkey, '->', e.message);
-    return;
+    return 0;
   }
-  const passing = (all || []).slice(0, Number(env.BACKFILL_MAX || 10));
-  console.log(`[AP] backfill ${username} -> ${followerInbox}: ${(all || []).length} videos, delivering ${passing.length}`);
+  const videos = (all || []).slice(0, max);
+  console.log(`[AP] backfill ${username} -> ${followerInbox}: ${(all || []).length} fetched, delivering ${videos.length}`);
   let delivered = 0;
-  for (const video of passing) {
-    const activity = buildCreate({ domain: env.AP_DOMAIN, username, video });
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      await sendSignedActivity({ env, clients, username, inbox: followerInbox, activity });
-      delivered++;
-    } catch (e) {
-      console.error('[AP] backfill deliver failed', e.message);
-    }
+  const BATCH = 10;
+  for (let i = 0; i < videos.length; i += BATCH) {
+    const batch = videos.slice(i, i + BATCH);
+    // eslint-disable-next-line no-await-in-loop
+    const results = await Promise.all(
+      batch.map((video) =>
+        sendSignedActivity({
+          env, clients, username, inbox: followerInbox,
+          activity: buildCreate({ domain: env.AP_DOMAIN, username, video }),
+        }).then(() => 1).catch((e) => { console.error('[AP] deliver failed', e.message); return 0; }),
+      ),
+    );
+    delivered += results.reduce((a, b) => a + b, 0);
   }
-  console.log(`[AP] backfill ${username}: delivered ${delivered}/${passing.length}`);
+  console.log(`[AP] backfill ${username}: delivered ${delivered}/${videos.length}`);
   return delivered;
+}
+
+/** Send an Update{Person} to a follower so it refreshes the cached bio/avatar/fields. */
+async function sendActorUpdate(env, clients, username, followerInbox) {
+  const pubkey = await resolvePubkey(env, clients, username);
+  if (!pubkey || !followerInbox) return false;
+  const [profile, publicKeyPem] = await Promise.all([
+    clients.funnelcake.getProfile(pubkey).catch(() => ({})),
+    clients.keycast.getPublicKeyPem(actorUrls(env.AP_DOMAIN, username).id),
+  ]);
+  const actor = buildActor({ domain: env.AP_DOMAIN, username, profile, publicKeyPem });
+  const update = buildUpdate({ domain: env.AP_DOMAIN, username, actor });
+  await sendSignedActivity({ env, clients, username, inbox: followerInbox, activity: update });
+  console.log(`[AP] sent Update for ${username} -> ${followerInbox}`);
+  return true;
 }
 
 /** Sign + POST an arbitrary AS2 activity (used for Accept) via keycast. */
@@ -486,6 +506,9 @@ export default {
       // handler but 503 in the background waitUntil context.
       let total = 0;
       for (const f of followers) {
+        // eslint-disable-next-line no-await-in-loop
+        await sendActorUpdate(env, clients, u, f.follower_inbox)
+          .catch((e) => console.error('[AP] debug update failed', e.message));
         // eslint-disable-next-line no-await-in-loop
         const n = await backfillFollower(env, clients, u, f.follower_inbox)
           .catch((e) => { console.error('[AP] debug backfill failed', e.message); return 0; });
