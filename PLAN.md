@@ -50,7 +50,8 @@ End-to-end **Divine (Nostr) → ActivityPub → Loops** federation is working on
 - WebFinger + actor resolve `@user@divine.video` on Loops/Mastodon.
 - Inbound **Follow → signed Accept** completes (follow flips from "pending" to followed).
 - **Backfill-on-follow** delivers the creator's recent videos as signed `Create{Note}` to the follower's inbox → they appear on Loops. Verified: `delivered 10/10` to `loops.video`.
-- Routing: `divine.video/ap/*` + `/.well-known/webfinger` + `/nodeinfo` are routed to the gateway via the **`divine-router` Fastly** edit (see that repo); the prod gateway worker is at `divine-activity-pub.protestnet.workers.dev`, route `divine.video/ap/*`.
+- Routing: `divine.video/ap/*` + `/nodeinfo` → the gateway worker (`divine-activity-pub.protestnet.workers.dev`); **`/.well-known/webfinger` is served by the `divine-router` itself** from the `divine-names` KV (KV-backed, proper 404s — NOT the gateway, which had a same-zone-subrequest bug). All via the `divine-router` Fastly service (v38).
+- **WebFinger home = the router** (reads the username KV that NIP-05 uses). The gateway's and name-server's WebFinger code is now dormant/unused (committed but not on the serving path).
 
 ### Hard-won findings (don't relearn these)
 - **Loops/Pixelfed never pull a remote outbox** — `handleRemoteActor` returns `videos:[]`. Remote content shows ONLY when **delivered** (push). Hence backfill-on-follow + ongoing delivery are required; the outbox is just for spec-compliance.
