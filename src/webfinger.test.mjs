@@ -69,24 +69,18 @@ describe('handleWebfinger', () => {
     expect(res.jrd.links.find((l) => l.rel === 'self').href).toBe('https://divine.video/ap/users/alice');
   });
 
-  it('returns 404 when the username does not resolve', async () => {
+  it('returns the JRD for any well-formed handle (lenient — actor enforces existence)', async () => {
     const res = await handleWebfinger({
       resource: 'acct:ghost@divine.video',
       nameServer,
       apDomain: AP_DOMAIN,
     });
-    expect(res.status).toBe(404);
-    expect(res.jrd).toBeUndefined();
+    expect(res.status).toBe(200);
+    expect(res.jrd.subject).toBe('acct:ghost@divine.video');
   });
 
   it('returns 400 for a malformed resource', async () => {
     const res = await handleWebfinger({ resource: 'garbage', nameServer, apDomain: AP_DOMAIN });
     expect(res.status).toBe(400);
-  });
-
-  it('treats a name-server error as not-found (404)', async () => {
-    const throwingNs = { async resolvePubkey() { throw new Error('upstream down'); } };
-    const res = await handleWebfinger({ resource: 'acct:alice@divine.video', nameServer: throwingNs, apDomain: AP_DOMAIN });
-    expect(res.status).toBe(404);
   });
 });

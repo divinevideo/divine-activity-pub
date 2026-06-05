@@ -68,14 +68,11 @@ export async function handleWebfinger({ resource, nameServer, apDomain }) {
   if (!parsed) return { status: 400 };
 
   const username = parsed.user.toLowerCase();
-  let pubkey = null;
-  try {
-    pubkey = await nameServer.resolvePubkey(username);
-  } catch {
-    pubkey = null;
-  }
-  if (!pubkey) return { status: 404 };
-
+  // WebFinger is pure discovery — return the JRD for any well-formed handle and
+  // let the ACTOR endpoint enforce existence (it 404s for unknown users). We do
+  // NOT hard-depend on a NIP-05 lookup here: that subrequest back to the
+  // divine.video zone fails when the gateway is invoked via the divine.video
+  // route (Worker same-zone quirk), which was 404-ing every handle.
   return {
     status: 200,
     jrd: buildWebfingerJrd({ user: username, host: parsed.host, apDomain }),
