@@ -544,6 +544,20 @@ export default {
       const username = decodeURIComponent(userMatch[1]).toLowerCase();
       const sub = userMatch[3];
 
+      // The router (which fronts divine.video and owns the name KV) resolves the
+      // username -> pubkey and passes it as X-Nostr-Pubkey. Trust it to warm the
+      // actors cache: the gateway can't reach NIP-05 from inside the divine.video
+      // zone (same-zone subrequest fails), so this is how *uncached* actors —
+      // i.e. every Divine user who hasn't been followed yet — get resolved.
+      const hintPubkey = request.headers.get('x-nostr-pubkey');
+      if (hintPubkey && /^[0-9a-f]{64}$/.test(hintPubkey)) {
+        await upsertActor(env.AP_DB, {
+          username,
+          nostrPubkey: hintPubkey,
+          apActorUrl: actorUrls(env.AP_DOMAIN, username).id,
+        }).catch(() => {});
+      }
+
       if (sub === 'inbox' && request.method === 'POST') {
         return handleInbox(env, clients, request, username, ctx);
       }
