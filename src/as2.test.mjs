@@ -71,6 +71,30 @@ describe('buildActor', () => {
     expect(actor.icon).toBeUndefined();
     expect(actor.name).toBe('bob');
   });
+
+  it('omits icon/image/website when the value is not a real URL (hex colour banners)', () => {
+    // Divine stores some avatars/banners as hex colours (e.g. "0x333333").
+    // Emitting those as image URLs makes Loops reject the whole actor ("Invalid url").
+    const actor = buildActor({
+      domain: DOMAIN,
+      username: 'mtv',
+      profile: { picture: '0xabcdef', banner: '0x333333', website: 'not a url' },
+      publicKeyPem: PEM,
+    });
+    expect(actor.icon).toBeUndefined();
+    expect(actor.image).toBeUndefined();
+    expect((actor.attachment || []).some((a) => a.name === 'Website')).toBe(false);
+  });
+
+  it('emits image when banner is a real URL', () => {
+    const actor = buildActor({
+      domain: DOMAIN,
+      username: 'mrbeast6000',
+      profile: { banner: 'https://media.divine.video/abc' },
+      publicKeyPem: PEM,
+    });
+    expect(actor.image).toEqual({ type: 'Image', mediaType: 'image/jpeg', url: 'https://media.divine.video/abc' });
+  });
 });
 
 describe('buildAttachment', () => {

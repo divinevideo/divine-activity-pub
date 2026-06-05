@@ -109,7 +109,11 @@ export function buildActor({ domain, username, profile = {}, publicKeyPem, keyId
     endpoints: { sharedInbox: urls.sharedInbox },
   };
 
-  if (picture) {
+  // Divine stores some avatars/banners as a hex colour (e.g. "0x333333") rather
+  // than a URL. Only emit icon/image when the value is a real http(s) URL — a
+  // remote server (Loops) validates these and rejects the whole actor with
+  // "Invalid url" if the avatar/header URL isn't a valid URL.
+  if (isHttpUrl(picture)) {
     actor.icon = {
       type: 'Image',
       mediaType: guessImageMime(picture),
@@ -118,7 +122,7 @@ export function buildActor({ domain, username, profile = {}, publicKeyPem, keyId
   }
 
   const banner = profile.banner || profile.banner_url || null;
-  if (banner) {
+  if (isHttpUrl(banner)) {
     actor.image = { type: 'Image', mediaType: guessImageMime(banner), url: banner };
   }
 
@@ -127,7 +131,7 @@ export function buildActor({ domain, username, profile = {}, publicKeyPem, keyId
   const link = (name, href, text) =>
     fields.push({ type: 'PropertyValue', name, value: `<a href="${escapeHtml(href)}" rel="me">${escapeHtml(text || href)}</a>` });
   link('Divine', urls.profileUrl, `${username}.${domain}`);
-  if (profile.website) link('Website', profile.website);
+  if (isHttpUrl(profile.website)) link('Website', profile.website);
   if (profile.nip05) fields.push({ type: 'PropertyValue', name: 'Nostr', value: escapeHtml(profile.nip05) });
   if (profile.lud16) fields.push({ type: 'PropertyValue', name: '⚡ Lightning', value: escapeHtml(profile.lud16) });
   if (fields.length) actor.attachment = fields;
@@ -266,6 +270,13 @@ export function toIso(value) {
   if (/^\d+$/.test(String(value))) return new Date(Number(value) * 1000).toISOString();
   const d = new Date(value);
   return Number.isNaN(d.getTime()) ? new Date(0).toISOString() : d.toISOString();
+}
+
+// True only for real http(s) URLs. Divine profile fields (banner/avatar/website)
+// sometimes carry non-URL junk (hex colours like "0x333333", empty strings),
+// which a remote server rejects as "Invalid url" if emitted in the actor.
+export function isHttpUrl(value) {
+  return typeof value === 'string' && /^https?:\/\/\S+$/i.test(value.trim());
 }
 
 export function escapeHtml(s) {
