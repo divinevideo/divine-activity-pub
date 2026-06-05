@@ -314,7 +314,7 @@ async function backfillFollower(env, clients, username, followerInbox) {
   const videos = (all || []).slice(0, max);
   console.log(`[AP] backfill ${username} -> ${followerInbox}: ${(all || []).length} fetched, delivering ${videos.length}`);
   let delivered = 0;
-  const BATCH = 10;
+  const BATCH = 25;
   for (let i = 0; i < videos.length; i += BATCH) {
     const batch = videos.slice(i, i + BATCH);
     // eslint-disable-next-line no-await-in-loop
@@ -365,6 +365,9 @@ async function sendSignedActivity({ env, clients, username, inbox, activity }) {
     headers: { ...headers, Accept: 'application/activity+json' },
     body,
   });
+  // MUST consume/cancel the body — leaving response bodies unread stalls the
+  // worker's connection pool and Cloudflare cancels in-flight requests (deadlock).
+  try { await res.text(); } catch { /* ignore */ }
   if (!res.ok) throw new Error(`signed POST ${res.status} -> ${inbox}`);
   return res;
 }
@@ -504,17 +507,17 @@ export default {
       const followers = await listFollowers(env.AP_DB, u);
       // INLINE (await) — fetches to api.divine.video are reliable in the fetch
       // handler but 503 in the background waitUntil context.
-      let total = 0;
+      // Run in the BACKGROUND (waitUntil) — delivering a full catalogue takes
+      // longer than the 15s edge request timeout. Returns immediately.
       for (const f of followers) {
-        // eslint-disable-next-line no-await-in-loop
-        await sendActorUpdate(env, clients, u, f.follower_inbox)
-          .catch((e) => console.error('[AP] debug update failed', e.message));
-        // eslint-disable-next-line no-await-in-loop
-        const n = await backfillFollower(env, clients, u, f.follower_inbox)
-          .catch((e) => { console.error('[AP] debug backfill failed', e.message); return 0; });
-        total += n || 0;
+        ctx.waitUntil(
+          sendActorUpdate(env, clients, u, f.follower_inbox)
+            .catch((e) => console.error('[AP] debug update failed', e.message))
+            .then(() => backfillFollower(env, clients, u, f.follower_inbox))
+            .catch((e) => console.error('[AP] debug backfill failed', e.message)),
+        );
       }
-      return jsonResponse(200, { triggered: followers.length, delivered: total, username: u });
+      return jsonResponse(202, { triggered: followers.length, status: 'running in background', username: u });
     }
 
     // WebFinger — makes THIS host self-discoverable (e.g. on workers.dev) so a

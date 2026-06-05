@@ -43,9 +43,26 @@ export function createFunnelcakeClient({ baseUrl, fallbackBaseUrl, fetchImpl = f
     },
     // GET /api/users/{pubkey}/videos -> { data, pagination, next_cursor } (kinds 34236/34235)
     async getUserVideos(pubkey, limit = 24) {
-      // Cap the query: a full back-catalog scan (e.g. 226 videos) times out -> 503.
-      const body = await getJson(`/api/users/${encodeURIComponent(pubkey)}/videos?limit=${limit}`);
-      return Array.isArray(body) ? body : (body.data || body.videos || []);
+      // Cursor-paginate the v2 endpoint to gather up to `limit` videos. The API
+      // returns { data, pagination:{ next_cursor:"o:100", has_more } }, capped at
+      // 100/page — so the full back-catalogue needs to follow the cursor.
+      const pk = encodeURIComponent(pubkey);
+      const out = [];
+      let cursor = null;
+      let guard = 0;
+      while (out.length < limit && guard < 50) {
+        guard += 1;
+        const page = Math.min(100, limit - out.length);
+        const q = `limit=${page}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`;
+        // eslint-disable-next-line no-await-in-loop
+        const body = await getJson(`/api/v2/users/${pk}/videos?${q}`);
+        const data = Array.isArray(body) ? body : (body.data || body.videos || []);
+        out.push(...data);
+        const pg = (body && body.pagination) || {};
+        cursor = pg.next_cursor;
+        if (!pg.has_more || !cursor || data.length === 0) break;
+      }
+      return out;
     },
     // GET /api/v2/videos?sort=recent -> new-video firehose (delivery trigger)
     async getRecentVideos(limit = 50) {
