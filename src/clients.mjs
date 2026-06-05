@@ -151,17 +151,27 @@ export function makeCachedModerationGate(moderation, kv, ttlSeconds = 3600) {
  */
 export function createNameServerClient({ baseUrl, fetchImpl = fetch }) {
   return {
-    /** username -> hex pubkey (or null if unknown). */
+    /** username -> hex pubkey (or null if unknown). Retries 5xx (the divine.video
+     *  edge throttles the Worker's egress with 503, which would 404 WebFinger). */
     async resolvePubkey(username) {
       const u = String(username).toLowerCase();
-      const res = await fetchImpl(
-        `${baseUrl}/.well-known/nostr.json?name=${encodeURIComponent(u)}`,
-        { headers: { Accept: 'application/json' } },
-      );
-      if (!res.ok) return null;
-      const body = await res.json();
-      const names = body && body.names ? body.names : {};
-      return names[u] || names[username] || null;
+      for (let attempt = 0; attempt < 4; attempt++) {
+        // eslint-disable-next-line no-await-in-loop
+        const res = await fetchImpl(
+          `${baseUrl}/.well-known/nostr.json?name=${encodeURIComponent(u)}`,
+          { headers: { Accept: 'application/json' } },
+        );
+        if (res.ok) {
+          // eslint-disable-next-line no-await-in-loop
+          const body = await res.json();
+          const names = body && body.names ? body.names : {};
+          return names[u] || names[username] || null;
+        }
+        if (res.status < 500) return null; // clean 4xx -> genuinely unknown
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
+      }
+      return null;
     },
   };
 }
