@@ -1,0 +1,49 @@
+# Staging config for the Divine ActivityPub Gateway.
+# Deploys to *.workers.dev (NO divine.video route) so we can smoke-test real
+# fediverse federation without touching production or needing keycast.
+#   wrangler deploy -c wrangler.staging.toml
+# SIGNER_MODE=local here is acceptable (staging mints+holds RSA keys in D1).
+# Production uses wrangler.toml (divine.video/ap/* route, SIGNER_MODE=keycast).
+name = "divine-activity-pub-staging"
+main = "src/index.mjs"
+compatibility_date = "2024-10-01"
+compatibility_flags = ["nodejs_compat"]
+
+workers_dev = true
+# No routes — served at https://divine-activity-pub-staging.<subdomain>.workers.dev
+
+[[d1_databases]]
+binding = "AP_DB"
+database_name = "divine-activity-pub"
+database_id = "73a1d29f-a37a-4a36-aac5-0e92df73255f"
+migrations_dir = "migrations"
+
+[[kv_namespaces]]
+binding = "AP_CACHE"
+id = "d5d913613a3e42368218a62d2bd68dc7"
+
+[[queues.producers]]
+binding = "DELIVERY_QUEUE"
+queue = "ap-delivery-queue"
+
+[[queues.consumers]]
+queue = "ap-delivery-queue"
+max_batch_size = 10
+max_batch_timeout = 30
+max_retries = 5
+
+[vars]
+# single = one shared RSA key (SINGLE_SIGNING_KEY_PKCS8 secret + SINGLE_SIGNING_PUBLIC_PEM secret). MVP.
+SIGNER_MODE = "single"
+# Actor host = the workers.dev URL (set after first deploy reveals the subdomain).
+# For a pure-gateway smoke test, actors live under this host, not divine.video.
+AP_DOMAIN = "divine-activity-pub-staging.protestnet.workers.dev"
+FUNNELCAKE_BASE_URL = "https://api.divine.video"
+MODERATION_BASE_URL = "https://moderation-api.divine.video"
+NAME_SERVER_BASE_URL = "https://divine.video"
+KEYCAST_BASE_URL = ""
+DELIVERY_POLL_LIMIT = "50"
+OUTBOX_MAX_ITEMS = "40"
+
+# No cron in staging by default — trigger delivery manually during testing to
+# avoid surprise polling. (Add back `[triggers] crons=[...]` to test the cron path.)

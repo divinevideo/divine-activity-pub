@@ -1,0 +1,93 @@
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+# If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+#
+# Divine ActivityPub Gateway
+#
+# Projects Divine (Nostr) videos into the fediverse: Divine users appear as
+# @user@divine.video ActivityPub actors. Nostr stays the source of truth; this
+# Worker is a read-projection + inbox gateway. It hosts NO video — attachment
+# URLs point at Divine's existing CDN. Mirrors divine-moderation-service's
+# D1 + Queues + cron house pattern.
+name = "divine-activity-pub"
+main = "src/index.mjs"
+compatibility_date = "2024-10-01"
+compatibility_flags = ["nodejs_compat"]
+
+workers_dev = true
+
+# Actors are served same-origin as WebFinger to avoid Mastodon's bidirectional
+# split-domain WebFinger check (see RESEARCH.md §Caveat). The /ap/* prefix on
+# divine.video routes here via the edge.
+routes = [
+  { pattern = "divine.video/ap/*", zone_name = "divine.video" }
+]
+
+# D1: gateway state (actors / followers / objects / inbox_seen). See migrations/.
+# database_id is a placeholder for local vitest-pool-workers; set the real id
+# before deploy via `wrangler d1 create divine-activity-pub` and paste it here.
+[[d1_databases]]
+binding = "AP_DB"
+database_name = "divine-activity-pub"
+database_id = "73a1d29f-a37a-4a36-aac5-0e92df73255f"
+migrations_dir = "migrations"
+
+# KV: short-lived caches (username↔pubkey resolution, actor docs). Optional.
+[[kv_namespaces]]
+binding = "AP_CACHE"
+id = "d5d913613a3e42368218a62d2bd68dc7"
+
+# Queue producer: one message per follower inbox (delivery fan-out). NEVER
+# fan out inline — one delivery = one queue message (subrequest/CPU caps).
+[[queues.producers]]
+binding = "DELIVERY_QUEUE"
+queue = "ap-delivery-queue"
+
+# Queue consumer: signs + POSTs each Create{Note} to a follower inbox. Relies
+# on Queue retries/backoff for transient failures.
+# Consumer temporarily on the staging worker; re-attach here once staging is torn down
+# or a dedicated prod queue exists. Follow/Accept needs no queue; delivery does.
+# [[queues.consumers]]
+# queue = "ap-delivery-queue"
+# max_batch_size = 10
+# max_batch_timeout = 30
+# max_retries = 5
+
+[vars]
+# Signer selection: "local" | "single" | "keycast".
+#  - local  : LocalKeycastClient — mints+stores per-actor RSA keys in D1, signs
+#             locally. Runs end-to-end WITHOUT keycast. ⚠️ DEV/STAGING ONLY.
+#  - single : SingleKeySigner — ONE RSA keypair shared by ALL actors, from env
+#             (SINGLE_SIGNING_KEY_PKCS8 secret + SINGLE_SIGNING_PUBLIC_PEM var
+#             below). ⚠️ MVP ONLY — blast radius = every user.
+#  - keycast: real HTTP keycast — keys custodied remotely, gateway holds none.
+# ⚠️ PRODUCTION MUST set SIGNER_MODE = "keycast". Default is "local" for now.
+SIGNER_MODE = "single"
+# Single-key mode public key: the SPKI RSA public key as full PEM TEXT
+# (-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----). Published verbatim
+# as every actor's publicKey.publicKeyPem. Only used when SIGNER_MODE = "single".
+# SINGLE_SIGNING_PUBLIC_PEM = "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----\n"
+# Host the gateway serves actors under. Stable, dereferenceable id base.
+AP_DOMAIN = "divine.video"
+# FunnelCake public REST API (videos + profiles; imeta already normalized).
+FUNNELCAKE_BASE_URL = "https://api.divine.video"
+FUNNELCAKE_FALLBACK_URL = "https://relay.divine.video"
+# Moderation verdict lookup (public, keyed on sha256). The federation gate.
+MODERATION_BASE_URL = "https://moderation-api.divine.video"
+# NIP-05 / name-server: resolves username -> nostr pubkey.
+NAME_SERVER_BASE_URL = "https://divine.video"
+# keycast RSA signing service (Workstream B). Empty => fail closed on sign.
+KEYCAST_BASE_URL = "https://keycast.divine.video"
+# Cron poll window for the new-video firehose (GET /api/v2/videos?sort=recent).
+DELIVERY_POLL_LIMIT = "50"
+# Max items rendered in an actor's outbox (caps per-request /check-result calls).
+OUTBOX_MAX_ITEMS = "40"
+
+# Cron: poll FunnelCake for new gated videos and enqueue deliveries.
+[triggers]
+crons = ["*/5 * * * *"]
+
+# Secrets (set with: wrangler secret put <NAME>)
+# KEYCAST_API_TOKEN - bearer token for POST /api/ap/sign + GET /api/ap/keys/{actor}
+# SINGLE_SIGNING_KEY_PKCS8 - (SIGNER_MODE=single) RSA PRIVATE key, PKCS8 DER as
+#   base64 (the base64 body only — NO PEM header/footer, NO newlines). See
+#   src/signer-single.mjs / SETUP.md for the exact generate command.
