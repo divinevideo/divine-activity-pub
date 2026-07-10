@@ -105,3 +105,7 @@ npm run dev       # wrangler dev
 Tests use injected fakes for every client (FunnelCake / moderation / keycast /
 fetch), so **no test touches the network or a real inbox**. The keycast fake
 generates a real RSA-2048 key via WebCrypto and signs locally.
+
+---
+
+Part of [Divine](https://divine.video) — your playground for human creativity · [Brand guidelines](https://github.com/divinevideo/brand-guidelines)
