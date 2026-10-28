@@ -13,10 +13,16 @@ release without that confirmation fails visibly; it does not silently skip or
 claim a deployment. This change does not configure GitHub or deploy anything.
 An authorized Platform operator must first:
 
-1. Confirm that the intended Cloudflare account already serves
-   `divine.video/ap/*` with Worker `divine-activity-pub`. Compare its live route,
-   settings, cron and queue ownership with `wrangler.toml`. Resolve drift before
-   enabling; do not create replacement resources or move traffic. Confirm existing
+1. Confirm the live ingress for `divine.video/ap/*` reaches Worker
+   `divine-activity-pub` in the intended Cloudflare account. The router's current
+   source sends ActivityPub traffic through Fastly to
+   `divine-activity-pub.protestnet.workers.dev`; apex DNS resolves to Fastly.
+   The declared Cloudflare zone route alone does not establish the serving path.
+   Verify the live router backend and the account owning `protestnet.workers.dev`,
+   and retain `workers_dev = true`: that endpoint is load-bearing for this ingress.
+   Compare live settings, cron and queue ownership with `wrangler.toml`.
+   Resolve drift before enabling; do not create replacements, disable workers.dev,
+   or move traffic. Confirm existing
    `AP_DB`, `AP_CACHE`, and `DELIVERY_QUEUE` identifiers match that config. The
    separate staging Worker must not become the production target.
 2. Confirm the current runtime secrets and signer configuration remain available.
@@ -58,7 +64,7 @@ activation, so an older workflow cannot overwrite an already deployed newer run.
 `release-result.json`, the workflow artifact, and the job summary record the
 environment, full source SHA, run/attempt, previous version, active provider
 version, timestamps and result. Wrangler errors, provider read errors, stale
-commits and health mismatches fail the job. An upload failure also fails the job.
+commits and persistent health mismatches fail the job. An upload failure also fails the job.
 If setup fails before the release script, the Actions job log records the failure
 and no release receipt is claimed.
 
@@ -67,7 +73,9 @@ the checked SHA, and an uncached GET to `https://divine.video/ap/health` returni
 that same version and source. The endpoint performs no database initialization,
 upstream calls or federation. It is a routing/version check, not a database or
 federation readiness probe. A provider re-read detects activation during the
-health check. Failed verification may mean the deployment **did** activate;
+health check. Verification retries reads up to six times, five seconds apart,
+with a ten-second timeout on each HTTP read, to allow edge propagation. It never
+repeats the deployment on a failed read. Failed verification may mean the deployment **did** activate;
 inspect the receipt and provider before taking recovery action. There is no
 automatic rollback or synthetic federation traffic.
 

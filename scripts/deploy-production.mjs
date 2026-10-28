@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, writeFileSync } from 'node:fs';
+import { setTimeout } from 'node:timers/promises';
 import { release } from './release.mjs';
 
 const env = process.env;
@@ -12,7 +13,7 @@ const receipt = {
 async function json(url, token) {
   const response = await fetch(url, {
     headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), Accept: 'application/json' },
-    signal: AbortSignal.timeout(30000), redirect: 'error',
+    signal: AbortSignal.timeout(10000), redirect: 'error',
   });
   if (!response.ok) throw new Error(`Read failed with HTTP ${response.status}`);
   return response.json();
@@ -20,7 +21,7 @@ async function json(url, token) {
 
 try {
   await release({
-    env, receipt,
+    env, receipt, wait: setTimeout,
     github: () => json('https://api.github.com/repos/divinevideo/divine-activity-pub/commits/main', env.GH_TOKEN),
     cloudflare: async (path) => {
       const data = await json(`https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/workers/scripts/divine-activity-pub${path}`, env.CLOUDFLARE_API_TOKEN);

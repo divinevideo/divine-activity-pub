@@ -13,6 +13,7 @@ function fixture() {
   let deployed = false;
   return {
     env: context(), receipt: { result: 'failed' },
+    wait: vi.fn(async () => {}),
     github: vi.fn(async () => ({ sha })),
     cloudflare: vi.fn(async path => path.startsWith('/versions/')
       ? { annotations: { 'workers/tag': sha } } : active(deployed ? 'new-version' : 'old-version')),
@@ -50,6 +51,28 @@ describe('production release', () => {
     await expect(release(f)).rejects.toThrow('failed');
     expect(f.health).not.toHaveBeenCalled(); expect(f.receipt.result).toBe('failed');
   });
+  it('retries stale public health without repeating deployment', async () => {
+    const f = fixture();
+    f.health.mockResolvedValueOnce({ status: 'ok', service: 'divine-activity-pub', version: 'old-version', source: 'b'.repeat(40) });
+    await release(f);
+    expect(f.receipt.result).toBe('verified');
+    expect(f.wait).toHaveBeenCalledWith(5000);
+    expect(f.health).toHaveBeenCalledTimes(2);
+    expect(f.deploy).toHaveBeenCalledTimes(1);
+  });
+  it('retries stale provider reads before checking public health', async () => {
+    const f = fixture(); const original = f.cloudflare.getMockImplementation();
+    let stale = true;
+    f.cloudflare.mockImplementation(async path => {
+      if (path.startsWith('/versions/') && stale) {
+        stale = false; return { annotations: { 'workers/tag': 'b'.repeat(40) } };
+      }
+      return original(path);
+    });
+    await release(f);
+    expect(f.receipt.result).toBe('verified'); expect(f.deploy).toHaveBeenCalledTimes(1);
+    expect(f.wait).toHaveBeenCalledTimes(1);
+  });
   it('rejects an unrelated active provider version', async () => {
     const f = fixture(); f.cloudflare.mockImplementation(async path => path.startsWith('/versions/')
       ? { annotations: { 'workers/tag': 'b'.repeat(40) } } : active('version'));
@@ -57,13 +80,20 @@ describe('production release', () => {
     expect(f.health).not.toHaveBeenCalled();
   });
   it.each(['status', 'service', 'version', 'source'])('rejects health mismatch: %s', async field => {
-    const f = fixture(); const health = await f.health(); health[field] = 'wrong'; f.health.mockResolvedValue(health);
+    const f = fixture(); const health = await f.health(); health[field] = 'wrong';
+    f.health.mockClear().mockResolvedValue(health);
     await expect(release(f)).rejects.toThrow('health does not match');
     expect(f.receipt.result).toBe('failed');
+    expect(f.health).toHaveBeenCalledTimes(6);
+    expect(f.deploy).toHaveBeenCalledTimes(1);
   });
   it('rejects activation changed during verification', async () => {
     const f = fixture(); const original = f.cloudflare.getMockImplementation();
-    f.cloudflare.mockImplementation(async path => f.health.mock.calls.length ? active('other-version') : original(path));
+    let reads = 0;
+    f.cloudflare.mockImplementation(async path => {
+      if (path === '/deployments' && ++reads > 1 && reads % 2 === 1) return active('other-version');
+      return original(path);
+    });
     await expect(release(f)).rejects.toThrow('changed during verification');
   });
   it('rejects split traffic or missing deployment metadata', () => {
