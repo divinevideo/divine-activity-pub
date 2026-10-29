@@ -5,6 +5,7 @@
   "license": "MPL-2.0",
   "type": "module",
   "scripts": {
+    "build": "wrangler deploy --dry-run --outdir dist",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "tail": "wrangler tail",

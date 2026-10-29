@@ -459,6 +459,14 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const path = url.pathname;
+    // Release verification must not initialize D1, query upstreams or federate.
+    if (path === '/ap/health' && request.method === 'GET') {
+      return new Response(JSON.stringify({
+        status: 'ok', service: 'divine-activity-pub',
+        version: env.CF_VERSION_METADATA?.id ?? null,
+        source: env.CF_VERSION_METADATA?.tag ?? null,
+      }), { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
+    }
     const clients = buildClients(env);
 
     await initSchema(env.AP_DB);
